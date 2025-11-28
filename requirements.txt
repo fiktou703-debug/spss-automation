@@ -1,9 +1,11 @@
-flask==3.0.0
-pandas==2.1.4
-numpy==1.26.2
-scipy==1.11.4
-statsmodels==0.14.1
-openpyxl==3.1.2
-xlrd==2.0.1
-requests==2.31.0
-gunicorn==21.2.0
+flask==2.3.3
+   pandas==2.0.3
+   numpy==1.24.3
+   scipy==1.11.1
+   statsmodels==0.14.0
+   openpyxl==3.1.2
+   xlrd==2.0.1
+   requests==2.31.0
+   gunicorn==21.2.0
+   python-dateutil==2.8.2
+   pytz==2023.3
