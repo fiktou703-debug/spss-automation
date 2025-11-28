@@ -40,7 +40,16 @@ class FileHandler:
             if '.csv' in file_source.lower():
                 df = pd.read_csv(file_content, encoding='utf-8-sig')
             else:
-                df = pd.read_excel(file_content)
+                try:
+                    # حاول أولاً openpyxl (ملفات .xlsx الحديثة)
+                    df = pd.read_excel(file_content, engine='openpyxl')
+                except Exception:
+                    try:
+                        # حاول قراءة بصيغة قديمة (xls)
+                        file_content.seek(0)
+                        df = pd.read_excel(file_content, engine='xlrd')
+                    except Exception as e:
+                        raise RuntimeError(f"فشل قراءة ملف Excel: {e}")
             
             return df
             
