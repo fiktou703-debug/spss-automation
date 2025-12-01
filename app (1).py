@@ -811,7 +811,7 @@ def health():
 @app.route('/columns')
 def columns():
     file_handler = FileHandler()
-    df = file_handler.load_file("https://docs.google.com/spreadsheets/d/1gllqSMUg-J5IibpA0WuT3JukryD44l_U/export?format=xlsx")
+    df = file_handler.load_file https://docs.google.com/spreadsheets/d/1gllqSMUg-J5IibpA0WuT3JukryD44l_U/export?format=xlsx
     return jsonify({"columns": df.columns.tolist()})
 
 @app.route('/analyze', methods=['POST'])
