@@ -41,7 +41,20 @@ class FileHandler:
                 df = pd.read_csv(file_content, encoding='utf-8-sig')
             else:
                 df = pd.read_excel(file_content)
-            
+                
+            import unicodedata
+
+            # تنظيف رؤوس الأعمدة 100%
+            clean_cols = []
+            for c in df.columns:
+            new = unicodedata.normalize("NFKC", str(c))
+            new = new.replace("\u00A0", " ").strip()
+            new = new.replace("\u200f", "").replace("\u200e", "").strip()
+            new = " ".join(new.split())
+            clean_cols.append(new)
+
+            df.columns = clean_cols
+
             return df
             
         except Exception as e:
