@@ -28,6 +28,7 @@ RUN pip install --upgrade pip setuptools wheel && \
 
 # نسخ الكود
 COPY app.py .
+COPY spss_word_generator.py
 
 # إنشاء مستخدم غير root للأمان
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
