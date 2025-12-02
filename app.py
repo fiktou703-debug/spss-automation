@@ -1,730 +1,944 @@
 """
-SPSS Word Generator - Professional Algerian Thesis Format
-=========================================================
-Generates professional Word documents for SPSS analysis results
-Formatted according to Algerian academic thesis standards
+نظام التحليل الإحصائي الآلي لمذكرات التخرج - الجزائر
+الإصدار: 2.4 - مع دعم Word Generator
+التاريخ: ديسمبر 2024
 
-Supported analyses:
-- Descriptive Statistics
-- T-Test (Independent Samples)
-- ANOVA (One-Way)
-- Correlation (Pearson/Spearman)
-- Regression (Multiple Linear)
-- Chi-Square Test
-- Cronbach's Alpha
-
-Author: Automated SPSS Analysis System
-Date: December 2024
+التعديلات الجديدة:
+- إضافة endpoint جديد /analyze_word لتوليد ملفات Word
+- دعم كامل لجميع أنواع التحليلات السبعة
+- تنسيق احترافي حسب المعايير الأكاديمية الجزائرية
 """
 
-from docx import Document
-from docx.shared import Pt, Inches, RGBColor, Cm
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
-import io
+from flask import Flask, request, jsonify, send_file
+import pandas as pd
+import numpy as np
+from scipy import stats
+import statsmodels.api as sm
+from datetime import datetime
+import requests
+from io import BytesIO
+import re
+import traceback
+import tempfile
+import os
+
+# Import Word Generator
+from spss_word_generator import SPSSWordGenerator
+
+app = Flask(__name__)
+
+# إعدادات الأمان
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB max
 
 
-class SPSSWordGenerator:
-    """Professional Word document generator for SPSS results"""
+class FileHandler:
+    """معالج الملفات - تحميل من Google Drive"""
     
-    def __init__(self):
-        self.doc = Document()
-        self._setup_document()
-        
-    def _setup_document(self):
-        """Configure document with Algerian thesis standards"""
-        # Page setup: A4 size
-        section = self.doc.sections[0]
-        section.page_height = Cm(29.7)  # A4 height
-        section.page_width = Cm(21.0)   # A4 width
-        
-        # Margins (Algerian standard)
-        section.top_margin = Cm(2.5)
-        section.bottom_margin = Cm(2.5)
-        section.left_margin = Cm(3.0)   # Wider for binding
-        section.right_margin = Cm(2.0)
-        
-        # Default font
-        style = self.doc.styles['Normal']
-        font = style.font
-        font.name = 'Times New Roman'
-        font.size = Pt(12)
-        
-        # RTL support for Arabic
-        style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
-    
-    def _add_title(self, text, level=1):
-        """Add formatted title"""
-        title = self.doc.add_paragraph()
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
-        run = title.add_run(text)
-        run.font.name = 'Times New Roman'
-        run.font.size = Pt(16 if level == 1 else 14)
-        run.font.bold = True
-        run.font.color.rgb = RGBColor(0, 0, 0)
-        
-        title.paragraph_format.space_after = Pt(12)
-        return title
-    
-    def _add_section_header(self, text):
-        """Add section header"""
-        header = self.doc.add_paragraph()
-        header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        
-        run = header.add_run(text)
-        run.font.name = 'Times New Roman'
-        run.font.size = Pt(14)
-        run.font.bold = True
-        run.font.color.rgb = RGBColor(0, 0, 139)  # Dark blue
-        
-        header.paragraph_format.space_before = Pt(12)
-        header.paragraph_format.space_after = Pt(6)
-        return header
-    
-    def _add_paragraph(self, text, align='right', bold=False):
-        """Add formatted paragraph"""
-        para = self.doc.add_paragraph()
-        para.alignment = WD_ALIGN_PARAGRAPH.RIGHT if align == 'right' else WD_ALIGN_PARAGRAPH.LEFT
-        
-        run = para.add_run(text)
-        run.font.name = 'Times New Roman'
-        run.font.size = Pt(12)
-        run.font.bold = bold
-        
-        return para
-    
-    def _create_table(self, rows, cols, headers=None):
-        """Create formatted SPSS-style table"""
-        table = self.doc.add_table(rows=rows, cols=cols)
-        table.style = 'Table Grid'
-        table.alignment = WD_TABLE_ALIGNMENT.CENTER
-        
-        # Set borders (black, 0.5pt)
-        for row in table.rows:
-            for cell in row.cells:
-                tc = cell._element
-                tcPr = tc.get_or_add_tcPr()
-                
-                # Add borders
-                tcBorders = OxmlElement('w:tcBorders')
-                for border_name in ['top', 'left', 'bottom', 'right']:
-                    border = OxmlElement(f'w:{border_name}')
-                    border.set(qn('w:val'), 'single')
-                    border.set(qn('w:sz'), '6')  # 0.5pt
-                    border.set(qn('w:color'), '000000')
-                    tcBorders.append(border)
-                
-                tcPr.append(tcBorders)
-        
-        # Header row formatting
-        if headers:
-            header_cells = table.rows[0].cells
-            for i, header_text in enumerate(headers):
-                cell = header_cells[i]
-                cell.text = header_text
-                
-                # Gray background
-                shading = OxmlElement('w:shd')
-                shading.set(qn('w:fill'), 'D9D9D9')
-                cell._element.get_or_add_tcPr().append(shading)
-                
-                # Center align and bold
-                paragraph = cell.paragraphs[0]
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                run = paragraph.runs[0]
-                run.font.bold = True
-                run.font.size = Pt(11)
-                run.font.name = 'Times New Roman'
-        
-        return table
-    
-    def _fill_table_cell(self, cell, text, align='center', bold=False):
-        """Fill table cell with formatted text"""
-        cell.text = str(text)
-        paragraph = cell.paragraphs[0]
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER if align == 'center' else WD_ALIGN_PARAGRAPH.RIGHT
-        
-        run = paragraph.runs[0]
-        run.font.name = 'Times New Roman'
-        run.font.size = Pt(11)
-        run.font.bold = bold
-    
-    def generate_descriptive(self, results):
-        """Generate Descriptive Statistics report"""
-        self._add_title("التحليل الإحصائي الوصفي\nDescriptive Statistics")
-        self.doc.add_paragraph()
-        
-        # Introduction
-        self._add_section_header("أولاً: الإحصاء الوصفي للمتغيرات")
-        self._add_paragraph(
-            "يعرض الجدول التالي الإحصاءات الوصفية للمتغيرات الرقمية المدروسة، "
-            "حيث يتضمن عدد المشاهدات، المتوسط الحسابي، الانحراف المعياري، "
-            "والقيم الدنيا والعليا لكل متغير."
-        )
-        self.doc.add_paragraph()
-        
-        # Numeric variables table
-        if results.get('متغيرات_رقمية'):
-            vars_data = results['متغيرات_رقمية']
+    def load_file(self, file_source):
+        """تحميل ملف من Google Drive أو أي مصدر"""
+        try:
+            # تحويل رابط Google Drive
+            if 'drive.google.com' in file_source or 'docs.google.com' in file_source:
+                file_source = self._convert_gdrive_url(file_source)
             
-            # Create table
-            table = self._create_table(
-                rows=len(vars_data) + 1,
-                cols=6,
-                headers=['المتغير', 'N', 'Mean', 'Std. Deviation', 'Minimum', 'Maximum']
-            )
+            # تحميل الملف
+            response = requests.get(file_source, timeout=30)
+            response.raise_for_status()
+            file_content = BytesIO(response.content)
             
-            # Fill data
-            for i, var in enumerate(vars_data, start=1):
-                cells = table.rows[i].cells
-                self._fill_table_cell(cells[0], var['المتغير'], align='right')
-                self._fill_table_cell(cells[1], var['العدد'])
-                self._fill_table_cell(cells[2], f"{var['المتوسط']:.2f}")
-                self._fill_table_cell(cells[3], f"{var['الانحراف_المعياري']:.2f}")
-                self._fill_table_cell(cells[4], f"{var['أصغر_قيمة']:.2f}")
-                self._fill_table_cell(cells[5], f"{var['أكبر_قيمة']:.2f}")
+            # قراءة حسب النوع
+            if '.csv' in file_source.lower() or 'csv' in file_source.lower():
+                df = pd.read_csv(file_content, encoding='utf-8-sig')
+            else:
+                df = pd.read_excel(file_content)
             
-            self.doc.add_paragraph()
-        
-        # Interpretation
-        self._add_section_header("ثانياً: التفسير الأكاديمي")
-        self._add_paragraph(
-            "تشير النتائج الإحصائية الوصفية إلى تباين في قيم المتغيرات المدروسة، "
-            "حيث يمكن ملاحظة اختلاف المتوسطات الحسابية والانحرافات المعيارية. "
-            "هذا التباين يعكس التنوع في استجابات أفراد العينة، ويساعد في فهم "
-            "الخصائص العامة للبيانات قبل إجراء التحليلات الاستدلالية."
-        )
-        self.doc.add_paragraph()
-        
-        # Writing guidelines
-        self._add_section_header("ثالثاً: كيفية الكتابة في المذكرة")
-        self._add_paragraph(
-            '▪ في فصل الإجراءات المنهجية:\n'
-            '"تم استخدام الإحصاء الوصفي لتحليل خصائص العينة، حيث تم حساب '
-            'المتوسطات الحسابية والانحرافات المعيارية للمتغيرات الرقمية."\n\n'
-            '▪ في فصل النتائج:\n'
-            'يُدرج الجدول أعلاه مع تفسير مختصر للنتائج البارزة.',
-            align='right'
-        )
-        
-        return self.doc
+            # تنظيف أسماء الأعمدة بشكل شامل
+            import unicodedata
+            clean_cols = []
+            for c in df.columns:
+                # تطبيع Unicode
+                new = unicodedata.normalize("NFKC", str(c))
+                # إزالة المسافات غير القابلة للكسر والأحرف الخفية
+                new = new.replace("\u00A0", " ").strip()
+                new = new.replace("\u200f", "").replace("\u200e", "").strip()
+                # توحيد المسافات المتعددة
+                new = " ".join(new.split())
+                clean_cols.append(new)
+            
+            df.columns = clean_cols
+            
+            return df
+            
+        except Exception as e:
+            print(f"خطأ في تحميل الملف: {str(e)}")
+            return None
     
-    def generate_ttest(self, results):
-        """Generate Independent Samples T-Test report"""
-        self._add_title("اختبار T للعينات المستقلة\nIndependent Samples T-Test")
-        self.doc.add_paragraph()
+    def _convert_gdrive_url(self, url):
+        """تحويل رابط Google Drive للتنزيل المباشر"""
+        file_id = None
         
-        if 'error' in results:
-            self._add_paragraph(f"❌ خطأ: {results['error']}")
-            return self.doc
+        # النمط 1: /file/d/FILE_ID/
+        match = re.search(r'/file/d/([a-zA-Z0-9_-]+)', url)
+        if match:
+            file_id = match.group(1)
         
-        # Introduction
-        self._add_section_header("أولاً: إحصاءات المجموعات")
-        self._add_paragraph(
-            "يعرض الجدول التالي الإحصاءات الوصفية لكل مجموعة من مجموعتي المقارنة."
-        )
-        self.doc.add_paragraph()
+        # النمط 2: id=FILE_ID
+        if not file_id:
+            match = re.search(r'id=([a-zA-Z0-9_-]+)', url)
+            if match:
+                file_id = match.group(1)
         
-        # Group Statistics Table
-        table1 = self._create_table(
-            rows=3,
-            cols=4,
-            headers=['المجموعة', 'N', 'Mean', 'Std. Deviation']
-        )
+        # النمط 3: /d/FILE_ID/ (Google Sheets)
+        if not file_id:
+            match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
+            if match:
+                file_id = match.group(1)
         
-        # Group 1
-        cells = table1.rows[1].cells
-        self._fill_table_cell(cells[0], results['المجموعة_1']['الاسم'], align='right')
-        self._fill_table_cell(cells[1], results['المجموعة_1']['العدد'])
-        self._fill_table_cell(cells[2], f"{results['المجموعة_1']['المتوسط']:.2f}")
-        self._fill_table_cell(cells[3], f"{results['المجموعة_1']['الانحراف']:.2f}")
+        if file_id:
+            return f"https://drive.google.com/uc?export=download&id={file_id}"
         
-        # Group 2
-        cells = table1.rows[2].cells
-        self._fill_table_cell(cells[0], results['المجموعة_2']['الاسم'], align='right')
-        self._fill_table_cell(cells[1], results['المجموعة_2']['العدد'])
-        self._fill_table_cell(cells[2], f"{results['المجموعة_2']['المتوسط']:.2f}")
-        self._fill_table_cell(cells[3], f"{results['المجموعة_2']['الانحراف']:.2f}")
+        return url
+
+
+class DescriptiveAnalyzer:
+    """محرك التحليل الوصفي"""
+    
+    def __init__(self, dataframe):
+        self.df = dataframe
+    
+    def run_analysis(self):
+        """تحليل وصفي كامل لجميع المتغيرات"""
+        results = {
+            "متغيرات_رقمية": [],
+            "متغيرات_فئوية": []
+        }
         
-        self.doc.add_paragraph()
+        for column in self.df.columns:
+            try:
+                if pd.api.types.is_numeric_dtype(self.df[column]):
+                    # متغير رقمي
+                    data = self.df[column].dropna()
+                    if len(data) > 0:
+                        results["متغيرات_رقمية"].append({
+                            "المتغير": column,
+                            "العدد": int(len(data)),
+                            "المتوسط": round(float(data.mean()), 2),
+                            "الوسيط": round(float(data.median()), 2),
+                            "الانحراف_المعياري": round(float(data.std()), 2),
+                            "أصغر_قيمة": round(float(data.min()), 2),
+                            "أكبر_قيمة": round(float(data.max()), 2)
+                        })
+                else:
+                    # متغير فئوي
+                    data = self.df[column].dropna()
+                    if len(data) > 0:
+                        counts = data.value_counts()
+                        percentages = (counts / len(data) * 100).round(1)
+                        
+                        categories = []
+                        for cat in counts.index[:10]:  # أول 10 فئات
+                            categories.append({
+                                "الفئة": str(cat),
+                                "التكرار": int(counts[cat]),
+                                "النسبة": float(percentages[cat])
+                            })
+                        
+                        results["متغيرات_فئوية"].append({
+                            "المتغير": column,
+                            "عدد_الفئات": int(len(counts)),
+                            "التوزيع": categories
+                        })
+            except:
+                continue
         
-        # T-Test Results
-        self._add_section_header("ثانياً: نتائج اختبار T")
-        self._add_paragraph(
-            "يوضح الجدول التالي نتائج اختبار T للفروق بين المجموعتين."
-        )
-        self.doc.add_paragraph()
-        
-        table2 = self._create_table(
-            rows=2,
-            cols=4,
-            headers=['t', 'df', 'Sig. (2-tailed)', "Cohen's d"]
-        )
-        
-        cells = table2.rows[1].cells
-        self._fill_table_cell(cells[0], f"{results['t']:.3f}")
-        self._fill_table_cell(cells[1], results['df'])
-        self._fill_table_cell(cells[2], f"{results['p']:.4f}")
-        self._fill_table_cell(cells[3], f"{results['cohens_d']:.3f}")
-        
-        self.doc.add_paragraph()
-        
-        # Interpretation
-        self._add_section_header("ثالثاً: التفسير الأكاديمي")
-        
-        if results['دال']:
-            interp = (
-                f"أظهرت نتائج اختبار T وجود فروق ذات دلالة إحصائية بين المجموعتين "
-                f"عند مستوى دلالة {results['مستوى_الدلالة']}, حيث بلغت قيمة t = {results['t']:.3f} "
-                f"بدرجات حرية df = {results['df']}, وقيمة p = {results['p']:.4f}. "
-                f"وبلغ حجم الأثر (Cohen's d = {results['cohens_d']:.3f}) وهو {results['حجم_الأثر']}، "
-                f"مما يشير إلى أن الفروق بين المجموعتين ذات أهمية عملية."
-            )
+        return results
+
+
+class InferentialAnalyzer:
+    """محرك الاختبارات الاستدلالية"""
+    
+    def __init__(self, dataframe):
+        self.df = dataframe
+    
+    def ttest(self, group_var, value_var):
+        """اختبار T للعينات المستقلة"""
+        try:
+            clean_df = self.df[[group_var, value_var]].dropna()
+            groups = clean_df[group_var].unique()
+            
+            if len(groups) != 2:
+                return {"error": f"يجب أن يحتوي {group_var} على فئتين فقط. الفئات الحالية: {len(groups)}"}
+            
+            group1 = clean_df[clean_df[group_var] == groups[0]][value_var]
+            group2 = clean_df[clean_df[group_var] == groups[1]][value_var]
+            
+            t_stat, p_value = stats.ttest_ind(group1, group2)
+            
+            # حجم الأثر (Cohen's d)
+            pooled_std = np.sqrt(((len(group1)-1)*group1.std()**2 + (len(group2)-1)*group2.std()**2) / (len(group1)+len(group2)-2))
+            cohens_d = (group1.mean() - group2.mean()) / pooled_std if pooled_std != 0 else 0
+            
+            # درجات الحرية
+            df = len(group1) + len(group2) - 2
+            
+            return {
+                "المجموعة_1": {
+                    "الاسم": str(groups[0]),
+                    "العدد": int(len(group1)),
+                    "المتوسط": round(float(group1.mean()), 2),
+                    "الانحراف": round(float(group1.std()), 2)
+                },
+                "المجموعة_2": {
+                    "الاسم": str(groups[1]),
+                    "العدد": int(len(group2)),
+                    "المتوسط": round(float(group2.mean()), 2),
+                    "الانحراف": round(float(group2.std()), 2)
+                },
+                "t": round(float(t_stat), 3),
+                "df": int(df),
+                "p": round(float(p_value), 4),
+                "cohens_d": round(float(cohens_d), 3),
+                "دال": bool(p_value < 0.05),
+                "مستوى_الدلالة": self._get_significance_level(p_value),
+                "حجم_الأثر": self._interpret_cohens_d(cohens_d)
+            }
+        except Exception as e:
+            return {"error": f"خطأ في اختبار T: {str(e)}"}
+    
+    def _get_significance_level(self, p):
+        """تحديد مستوى الدلالة"""
+        if p < 0.001:
+            return "0.001"
+        elif p < 0.01:
+            return "0.01"
+        elif p < 0.05:
+            return "0.05"
         else:
-            interp = (
-                f"أظهرت نتائج اختبار T عدم وجود فروق ذات دلالة إحصائية بين المجموعتين "
-                f"عند مستوى دلالة 0.05, حيث بلغت قيمة t = {results['t']:.3f} "
-                f"بدرجات حرية df = {results['df']}, وقيمة p = {results['p']:.4f}، "
-                f"وهي قيمة أكبر من 0.05، مما يعني قبول الفرضية الصفرية."
-            )
-        
-        self._add_paragraph(interp)
-        
-        return self.doc
+            return "غير دال"
     
-    def generate_anova(self, results):
-        """Generate One-Way ANOVA report"""
-        self._add_title("تحليل التباين الأحادي\nOne-Way ANOVA")
-        self.doc.add_paragraph()
-        
-        if 'error' in results:
-            self._add_paragraph(f"❌ خطأ: {results['error']}")
-            return self.doc
-        
-        # Introduction
-        self._add_section_header("أولاً: جدول تحليل التباين ANOVA")
-        self._add_paragraph(
-            "يعرض الجدول التالي نتائج تحليل التباين الأحادي للفروق بين المجموعات."
-        )
-        self.doc.add_paragraph()
-        
-        # ANOVA Table
-        table = self._create_table(
-            rows=4,
-            cols=6,
-            headers=['مصدر التباين', 'Sum of Squares', 'df', 'Mean Square', 'F', 'Sig.']
-        )
-        
-        # Between Groups
-        cells = table.rows[1].cells
-        self._fill_table_cell(cells[0], 'بين المجموعات', align='right')
-        self._fill_table_cell(cells[1], f"{results['بين_المجموعات']['مجموع_المربعات']:.3f}")
-        self._fill_table_cell(cells[2], results['بين_المجموعات']['درجات_الحرية'])
-        self._fill_table_cell(cells[3], f"{results['بين_المجموعات']['متوسط_المربعات']:.3f}")
-        self._fill_table_cell(cells[4], f"{results['F']:.3f}")
-        self._fill_table_cell(cells[5], f"{results['p']:.4f}")
-        
-        # Within Groups
-        cells = table.rows[2].cells
-        self._fill_table_cell(cells[0], 'داخل المجموعات', align='right')
-        self._fill_table_cell(cells[1], f"{results['داخل_المجموعات']['مجموع_المربعات']:.3f}")
-        self._fill_table_cell(cells[2], results['داخل_المجموعات']['درجات_الحرية'])
-        self._fill_table_cell(cells[3], f"{results['داخل_المجموعات']['متوسط_المربعات']:.3f}")
-        self._fill_table_cell(cells[4], '-')
-        self._fill_table_cell(cells[5], '-')
-        
-        # Total
-        cells = table.rows[3].cells
-        self._fill_table_cell(cells[0], 'المجموع', align='right')
-        self._fill_table_cell(cells[1], f"{results['الكلي']['مجموع_المربعات']:.3f}")
-        self._fill_table_cell(cells[2], results['الكلي']['درجات_الحرية'])
-        self._fill_table_cell(cells[3], '-')
-        self._fill_table_cell(cells[4], '-')
-        self._fill_table_cell(cells[5], '-')
-        
-        self.doc.add_paragraph()
-        
-        # Interpretation
-        self._add_section_header("ثانياً: التفسير الأكاديمي")
-        
-        if results['دال']:
-            interp = (
-                f"أظهرت نتائج تحليل التباين الأحادي (ANOVA) وجود فروق ذات دلالة إحصائية "
-                f"بين المجموعات عند مستوى دلالة {results['مستوى_الدلالة']}, حيث بلغت "
-                f"قيمة F = {results['F']:.3f} بدرجات حرية "
-                f"({results['بين_المجموعات']['درجات_الحرية']}, {results['داخل_المجموعات']['درجات_الحرية']}), "
-                f"وقيمة p = {results['p']:.4f}. وبلغ حجم الأثر (Eta Squared = {results['eta_squared']:.3f}) "
-                f"وهو {results['حجم_الأثر']}، مما يشير إلى وجود فروق جوهرية بين المجموعات."
-            )
+    def _interpret_cohens_d(self, d):
+        """تفسير حجم الأثر"""
+        abs_d = abs(d)
+        if abs_d < 0.2:
+            return "ضعيف جداً"
+        elif abs_d < 0.5:
+            return "ضعيف"
+        elif abs_d < 0.8:
+            return "متوسط"
         else:
-            interp = (
-                f"أظهرت نتائج تحليل التباين الأحادي (ANOVA) عدم وجود فروق ذات دلالة إحصائية "
-                f"بين المجموعات عند مستوى دلالة 0.05, حيث بلغت قيمة F = {results['F']:.3f} "
-                f"بدرجات حرية ({results['بين_المجموعات']['درجات_الحرية']}, "
-                f"{results['داخل_المجموعات']['درجات_الحرية']}), وقيمة p = {results['p']:.4f}، "
-                f"وهي قيمة أكبر من 0.05."
-            )
-        
-        self._add_paragraph(interp)
-        
-        return self.doc
+            return "كبير"
     
-    def generate_correlation(self, results):
-        """Generate Correlation Analysis report"""
-        self._add_title("تحليل الارتباط\nCorrelation Analysis")
-        self.doc.add_paragraph()
-        
-        if 'error' in results:
-            self._add_paragraph(f"❌ خطأ: {results['error']}")
-            return self.doc
-        
-        # Introduction
-        self._add_section_header("أولاً: مصفوفة معاملات الارتباط")
-        method = "بيرسون (Pearson)" if results.get('الطريقة') == 'pearson' else "سبيرمان (Spearman)"
-        self._add_paragraph(f"يعرض الجدول التالي معاملات الارتباط باستخدام طريقة {method}.")
-        self.doc.add_paragraph()
-        
-        # Correlation Matrix
-        if 'مصفوفة_الارتباط' in results:
-            matrix = results['مصفوفة_الارتباط']
-            variables = list(matrix.keys())
-            n_vars = len(variables)
+    def anova(self, dependent, independent):
+        """تحليل التباين الأحادي"""
+        try:
+            clean_df = self.df[[independent, dependent]].dropna()
+            groups = []
+            labels = []
             
-            # Create table
-            table = self._create_table(
-                rows=n_vars + 1,
-                cols=n_vars + 1,
-                headers=[''] + variables
-            )
+            for name, group in clean_df.groupby(independent):
+                groups.append(group[dependent].values)
+                labels.append(name)
             
-            # Fill correlation values
-            for i, var1 in enumerate(variables, start=1):
-                cells = table.rows[i].cells
-                self._fill_table_cell(cells[0], var1, align='right', bold=True)
-                
-                for j, var2 in enumerate(variables, start=1):
-                    corr_val = matrix[var1].get(var2, {}).get('الارتباط', '-')
-                    if corr_val != '-':
-                        # Add asterisk for significant correlations
-                        p_val = matrix[var1].get(var2, {}).get('p', 1.0)
-                        if p_val < 0.001:
-                            display = f"{corr_val:.3f}***"
-                        elif p_val < 0.01:
-                            display = f"{corr_val:.3f}**"
-                        elif p_val < 0.05:
-                            display = f"{corr_val:.3f}*"
-                        else:
-                            display = f"{corr_val:.3f}"
-                        self._fill_table_cell(cells[j], display)
+            if len(groups) < 2:
+                return {"error": f"يجب وجود مجموعتين على الأقل في {independent}"}
+            
+            # تحليل التباين
+            f_stat, p_value = stats.f_oneway(*groups)
+            
+            # حساب مجموع المربعات
+            grand_mean = clean_df[dependent].mean()
+            ss_between = sum([len(g) * (np.mean(g) - grand_mean)**2 for g in groups])
+            ss_within = sum([np.sum((g - np.mean(g))**2) for g in groups])
+            ss_total = ss_between + ss_within
+            
+            # درجات الحرية
+            df_between = len(groups) - 1
+            df_within = len(clean_df) - len(groups)
+            df_total = len(clean_df) - 1
+            
+            # متوسط المربعات
+            ms_between = ss_between / df_between
+            ms_within = ss_within / df_within
+            
+            # حجم الأثر (Eta Squared)
+            eta_squared = ss_between / ss_total
+            
+            return {
+                "بين_المجموعات": {
+                    "مجموع_المربعات": round(float(ss_between), 3),
+                    "درجات_الحرية": int(df_between),
+                    "متوسط_المربعات": round(float(ms_between), 3)
+                },
+                "داخل_المجموعات": {
+                    "مجموع_المربعات": round(float(ss_within), 3),
+                    "درجات_الحرية": int(df_within),
+                    "متوسط_المربعات": round(float(ms_within), 3)
+                },
+                "الكلي": {
+                    "مجموع_المربعات": round(float(ss_total), 3),
+                    "درجات_الحرية": int(df_total)
+                },
+                "F": round(float(f_stat), 3),
+                "p": round(float(p_value), 4),
+                "eta_squared": round(float(eta_squared), 3),
+                "دال": bool(p_value < 0.05),
+                "مستوى_الدلالة": self._get_significance_level(p_value),
+                "حجم_الأثر": self._interpret_eta_squared(eta_squared)
+            }
+        except Exception as e:
+            return {"error": f"خطأ في ANOVA: {str(e)}"}
+    
+    def _interpret_eta_squared(self, eta):
+        """تفسير Eta Squared"""
+        if eta < 0.01:
+            return "ضعيف جداً"
+        elif eta < 0.06:
+            return "ضعيف"
+        elif eta < 0.14:
+            return "متوسط"
+        else:
+            return "كبير"
+    
+    def correlation(self, variables):
+        """تحليل الارتباط"""
+        try:
+            if not variables or len(variables) < 2:
+                return {"error": "يجب تحديد متغيرين على الأقل"}
+            
+            # استخراج البيانات
+            data = self.df[variables].dropna()
+            
+            if len(data) < 3:
+                return {"error": "عدد المشاهدات غير كافٍ (أقل من 3)"}
+            
+            # حساب الارتباط
+            corr_matrix = data.corr()
+            
+            # بناء المصفوفة مع قيم p
+            result_matrix = {}
+            for var1 in variables:
+                result_matrix[var1] = {}
+                for var2 in variables:
+                    if var1 == var2:
+                        result_matrix[var1][var2] = {
+                            "الارتباط": 1.0,
+                            "p": 0.0
+                        }
                     else:
-                        self._fill_table_cell(cells[j], corr_val)
+                        r, p = stats.pearsonr(data[var1], data[var2])
+                        result_matrix[var1][var2] = {
+                            "الارتباط": round(float(r), 3),
+                            "p": round(float(p), 4)
+                        }
             
-            self.doc.add_paragraph()
-            self._add_paragraph("* p < 0.05, ** p < 0.01, *** p < 0.001", align='left')
-            self.doc.add_paragraph()
-        
-        # Interpretation
-        self._add_section_header("ثانياً: التفسير الأكاديمي")
-        self._add_paragraph(
-            "تشير نتائج تحليل الارتباط إلى وجود علاقات ارتباطية بين المتغيرات المدروسة. "
-            "العلاقات الموجبة (قيم موجبة) تشير إلى أن زيادة أحد المتغيرين تصاحبها زيادة في الآخر، "
-            "بينما العلاقات السالبة (قيم سالبة) تشير إلى علاقة عكسية. قوة العلاقة تُحدد بقيمة "
-            "معامل الارتباط: ضعيفة (< 0.3)، متوسطة (0.3-0.7)، قوية (> 0.7)."
-        )
-        
-        return self.doc
+            return {
+                "الطريقة": "pearson",
+                "عدد_المشاهدات": int(len(data)),
+                "مصفوفة_الارتباط": result_matrix
+            }
+        except Exception as e:
+            return {"error": f"خطأ في تحليل الارتباط: {str(e)}"}
     
-    def generate_regression(self, results):
-        """Generate Multiple Regression Analysis report"""
-        self._add_title("تحليل الانحدار المتعدد\nMultiple Regression Analysis")
-        self.doc.add_paragraph()
-        
-        if 'error' in results:
-            self._add_paragraph(f"❌ خطأ: {results['error']}")
-            return self.doc
-        
-        # Model Summary
-        self._add_section_header("أولاً: ملخص النموذج - Model Summary")
-        self._add_paragraph("يوضح الجدول التالي جودة النموذج الإحصائي.")
-        self.doc.add_paragraph()
-        
-        table1 = self._create_table(
-            rows=2,
-            cols=4,
-            headers=['R', 'R Square', 'Adjusted R Square', 'Std. Error']
-        )
-        
-        cells = table1.rows[1].cells
-        self._fill_table_cell(cells[0], f"{results['R']:.3f}")
-        self._fill_table_cell(cells[1], f"{results['R2']:.3f}")
-        self._fill_table_cell(cells[2], f"{results['R2_المعدل']:.3f}")
-        self._fill_table_cell(cells[3], f"{results.get('الخطأ_المعياري', 0):.3f}")
-        
-        self.doc.add_paragraph()
-        
-        # ANOVA Table
-        self._add_section_header("ثانياً: جدول تحليل التباين ANOVA")
-        self._add_paragraph("يوضح الجدول التالي مدى معنوية النموذج ككل.")
-        self.doc.add_paragraph()
-        
-        table2 = self._create_table(
-            rows=3,
-            cols=6,
-            headers=['مصدر التباين', 'Sum of Squares', 'df', 'Mean Square', 'F', 'Sig.']
-        )
-        
-        # Regression row
-        cells = table2.rows[1].cells
-        self._fill_table_cell(cells[0], 'الانحدار', align='right')
-        self._fill_table_cell(cells[1], '-')
-        self._fill_table_cell(cells[2], '-')
-        self._fill_table_cell(cells[3], '-')
-        self._fill_table_cell(cells[4], f"{results['F']:.3f}")
-        self._fill_table_cell(cells[5], f"{results['p_model']:.4f}")
-        
-        # Residual row
-        cells = table2.rows[2].cells
-        self._fill_table_cell(cells[0], 'البواقي', align='right')
-        self._fill_table_cell(cells[1], '-')
-        self._fill_table_cell(cells[2], '-')
-        self._fill_table_cell(cells[3], '-')
-        self._fill_table_cell(cells[4], '-')
-        self._fill_table_cell(cells[5], '-')
-        
-        self.doc.add_paragraph()
-        
-        # Coefficients Table
-        self._add_section_header("ثالثاً: معاملات الانحدار - Coefficients")
-        self._add_paragraph("يوضح الجدول التالي معاملات الانحدار لكل متغير مستقل.")
-        self.doc.add_paragraph()
-        
-        if 'معاملات' in results:
-            coefs = results['معاملات']
-            table3 = self._create_table(
-                rows=len(coefs) + 1,
-                cols=5,
-                headers=['المتغير', 'B', 'Std. Error', 't', 'Sig.']
-            )
+    def chi_square(self, var1, var2):
+        """اختبار مربع كاي"""
+        try:
+            # Create contingency table
+            contingency = pd.crosstab(self.df[var1], self.df[var2])
             
-            for i, coef in enumerate(coefs, start=1):
-                cells = table3.rows[i].cells
-                self._fill_table_cell(cells[0], coef['المتغير'], align='right')
-                self._fill_table_cell(cells[1], f"{coef['المعامل']:.3f}")
-                self._fill_table_cell(cells[2], f"{coef.get('الخطأ_المعياري', 0):.3f}")
-                self._fill_table_cell(cells[3], f"{coef.get('t', 0):.3f}")
-                self._fill_table_cell(cells[4], f"{coef['p']:.4f}")
+            # Chi-square test
+            chi2, p, dof, expected = stats.chi2_contingency(contingency)
             
-            self.doc.add_paragraph()
-        
-        # Interpretation
-        self._add_section_header("رابعاً: التفسير الأكاديمي")
-        interp = (
-            f"أظهرت نتائج تحليل الانحدار المتعدد أن النموذج يفسر {results['R2']*100:.1f}% "
-            f"من التباين في المتغير التابع (R² = {results['R2']:.3f}). "
-        )
-        
-        if results['دال']:
-            interp += (
-                f"وأظهر اختبار F معنوية النموذج ككل (F = {results['F']:.3f}, "
-                f"p = {results['p_model']:.4f}), مما يشير إلى أن المتغيرات المستقلة "
-                f"مجتمعة لها تأثير دال إحصائياً على المتغير التابع."
-            )
+            # Cramér's V
+            n = contingency.sum().sum()
+            min_dim = min(contingency.shape[0], contingency.shape[1]) - 1
+            cramers_v = np.sqrt(chi2 / (n * min_dim))
+            
+            return {
+                "المتغير_1": var1,
+                "المتغير_2": var2,
+                "chi2": round(float(chi2), 3),
+                "df": int(dof),
+                "p": round(float(p), 4),
+                "cramers_v": round(float(cramers_v), 3),
+                "دال": bool(p < 0.05),
+                "قوة_العلاقة": self._interpret_cramers_v(cramers_v),
+                "جدول_التوافق": contingency.to_dict()
+            }
+        except Exception as e:
+            return {"error": f"خطأ في Chi-Square: {str(e)}"}
+    
+    def _interpret_cramers_v(self, v):
+        """تفسير Cramér's V"""
+        if v < 0.1:
+            return "ضعيف جداً"
+        elif v < 0.3:
+            return "ضعيف"
+        elif v < 0.5:
+            return "متوسط"
         else:
-            interp += "إلا أن النموذج ككل غير دال إحصائياً عند مستوى 0.05."
-        
-        self._add_paragraph(interp)
-        
-        return self.doc
+            return "قوي"
     
-    def generate_chisquare(self, results):
-        """Generate Chi-Square Test report"""
-        self._add_title("اختبار مربع كاي\nChi-Square Test")
-        self.doc.add_paragraph()
-        
-        if 'error' in results:
-            self._add_paragraph(f"❌ خطأ: {results['error']}")
-            return self.doc
-        
-        # Introduction
-        self._add_section_header("أولاً: جدول التوافق - Crosstabulation")
-        self._add_paragraph(
-            "يعرض الجدول التالي التوزيع التكراري للمتغيرين وقيم التكرارات المتوقعة."
-        )
-        self.doc.add_paragraph()
-        
-        # Crosstabulation Table
-        if 'جدول_التوافق' in results:
-            crosstab = results['جدول_التوافق']
-            # Note: Simplified version - actual implementation would need proper matrix display
-            self._add_paragraph("(يُدرج هنا جدول التوافق الكامل)")
-            self.doc.add_paragraph()
-        
-        # Chi-Square Tests
-        self._add_section_header("ثانياً: نتائج اختبار مربع كاي")
-        self._add_paragraph("يوضح الجدول التالي نتائج اختبار الاستقلالية.")
-        self.doc.add_paragraph()
-        
-        table = self._create_table(
-            rows=2,
-            cols=4,
-            headers=['Chi-Square', 'df', 'Sig.', "Cramér's V"]
-        )
-        
-        cells = table.rows[1].cells
-        self._fill_table_cell(cells[0], f"{results['chi2']:.3f}")
-        self._fill_table_cell(cells[1], results['df'])
-        self._fill_table_cell(cells[2], f"{results['p']:.4f}")
-        self._fill_table_cell(cells[3], f"{results['cramers_v']:.3f}")
-        
-        self.doc.add_paragraph()
-        
-        # Interpretation
-        self._add_section_header("ثالثاً: التفسير الأكاديمي")
-        
-        if results['دال']:
-            interp = (
-                f"أظهرت نتائج اختبار مربع كاي (χ²) وجود علاقة ذات دلالة إحصائية بين "
-                f"{results['المتغير_1']} و{results['المتغير_2']} عند مستوى دلالة 0.05، "
-                f"حيث بلغت قيمة χ² = {results['chi2']:.3f} بدرجات حرية df = {results['df']}, "
-                f"وقيمة p = {results['p']:.4f}. وبلغ معامل كريمر (Cramér's V = {results['cramers_v']:.3f}) "
-                f"وهو {results['قوة_العلاقة']}، مما يدل على وجود ارتباط بين المتغيرين."
-            )
-        else:
-            interp = (
-                f"أظهرت نتائج اختبار مربع كاي (χ²) عدم وجود علاقة ذات دلالة إحصائية بين "
-                f"{results['المتغير_1']} و{results['المتغير_2']} عند مستوى دلالة 0.05، "
-                f"حيث بلغت قيمة χ² = {results['chi2']:.3f} بدرجات حرية df = {results['df']}, "
-                f"وقيمة p = {results['p']:.4f}، وهي قيمة أكبر من 0.05."
-            )
-        
-        self._add_paragraph(interp)
-        
-        return self.doc
-    
-    def generate_cronbach(self, results):
-        """Generate Cronbach's Alpha Reliability report"""
-        self._add_title("معامل ألفا كرونباخ للثبات\nCronbach's Alpha Reliability")
-        self.doc.add_paragraph()
-        
-        if 'error' in results:
-            self._add_paragraph(f"❌ خطأ: {results['error']}")
-            return self.doc
-        
-        # Introduction
-        self._add_section_header("أولاً: إحصاءات الثبات - Reliability Statistics")
-        self._add_paragraph(
-            "يعرض الجدول التالي معامل ألفا كرونباخ الذي يقيس الاتساق الداخلي للمقياس."
-        )
-        self.doc.add_paragraph()
-        
-        # Reliability Statistics Table
-        table1 = self._create_table(
-            rows=2,
-            cols=2,
-            headers=["Cronbach's Alpha", 'N of Items']
-        )
-        
-        cells = table1.rows[1].cells
-        self._fill_table_cell(cells[0], f"{results['alpha']:.3f}")
-        self._fill_table_cell(cells[1], results['عدد_البنود'])
-        
-        self.doc.add_paragraph()
-        
-        # Item Statistics
-        self._add_section_header("ثانياً: إحصاءات البنود - Item Statistics")
-        self._add_paragraph("يوضح الجدول التالي الإحصاءات الوصفية لكل بند في المقياس.")
-        self.doc.add_paragraph()
-        
-        if 'إحصاءات_البنود' in results:
-            items = results['إحصاءات_البنود']
-            table2 = self._create_table(
-                rows=len(items) + 1,
-                cols=4,
-                headers=['البند', 'Mean', 'Std. Deviation', 'Alpha if Deleted']
-            )
+    def cronbach_alpha(self, variables):
+        """حساب معامل ألفا كرونباخ"""
+        try:
+            if not variables or len(variables) < 2:
+                return {"error": "يجب تحديد متغيرين على الأقل"}
             
-            for i, item in enumerate(items, start=1):
-                cells = table2.rows[i].cells
-                self._fill_table_cell(cells[0], item['البند'], align='right')
-                self._fill_table_cell(cells[1], f"{item['المتوسط']:.2f}")
-                self._fill_table_cell(cells[2], f"{item['الانحراف']:.2f}")
-                alpha_del = item.get('ألفا_إذا_حُذف')
-                self._fill_table_cell(cells[3], f"{alpha_del:.3f}" if alpha_del else 'N/A')
+            # استخراج البيانات
+            data = self.df[variables].dropna()
             
-            self.doc.add_paragraph()
-        
-        # Interpretation
-        self._add_section_header("ثالثاً: التفسير الأكاديمي")
-        
-        interp = (
-            f"بلغت قيمة معامل ألفا كرونباخ ({results['alpha']:.3f})، وهي قيمة تُصنف "
-            f"على أنها {results['التصنيف']} وفقاً للمعايير المتعارف عليها. "
-        )
-        
-        if results['alpha'] >= 0.70:
-            interp += (
-                "وهذا يشير إلى أن المقياس يتمتع بثبات داخلي جيد، مما يعني أن البنود "
-                "متسقة فيما بينها وتقيس نفس البُنية النظرية. من خلال عمود 'Alpha if Deleted'، "
-                "يمكن ملاحظة البنود التي قد يؤدي حذفها إلى تحسين أو خفض الثبات الكلي للمقياس."
-            )
+            if len(data) < 2:
+                return {"error": "عدد المشاهدات غير كافٍ"}
+            
+            # حساب Cronbach's Alpha
+            item_vars = data.var(axis=0, ddof=1)
+            total_var = data.sum(axis=1).var(ddof=1)
+            n_items = len(variables)
+            
+            alpha = (n_items / (n_items - 1)) * (1 - item_vars.sum() / total_var)
+            
+            # إحصاءات البنود
+            items_stats = []
+            for var in variables:
+                # Alpha if item deleted
+                other_vars = [v for v in variables if v != var]
+                if len(other_vars) > 1:
+                    temp_data = data[other_vars]
+                    temp_item_vars = temp_data.var(axis=0, ddof=1)
+                    temp_total_var = temp_data.sum(axis=1).var(ddof=1)
+                    n_temp = len(other_vars)
+                    alpha_if_deleted = (n_temp / (n_temp - 1)) * (1 - temp_item_vars.sum() / temp_total_var)
+                else:
+                    alpha_if_deleted = None
+                
+                items_stats.append({
+                    "البند": var,
+                    "المتوسط": round(float(data[var].mean()), 2),
+                    "الانحراف": round(float(data[var].std()), 2),
+                    "الارتباط_مع_المجموع": round(float(data[var].corr(data.sum(axis=1))), 3),
+                    "ألفا_إذا_حُذف": round(float(alpha_if_deleted), 3) if alpha_if_deleted else None
+                })
+            
+            return {
+                "alpha": round(float(alpha), 3),
+                "عدد_البنود": n_items,
+                "حجم_العينة": int(len(data)),
+                "التصنيف": self._classify_alpha(alpha),
+                "إحصاءات_البنود": items_stats
+            }
+        except Exception as e:
+            return {"error": f"خطأ في Cronbach's Alpha: {str(e)}"}
+    
+    def _classify_alpha(self, alpha):
+        """تصنيف قيمة Alpha"""
+        if alpha >= 0.9:
+            return "ممتاز (Excellent)"
+        elif alpha >= 0.8:
+            return "جيد (Good)"
+        elif alpha >= 0.7:
+            return "مقبول (Acceptable)"
+        elif alpha >= 0.6:
+            return "مشكوك فيه (Questionable)"
+        elif alpha >= 0.5:
+            return "ضعيف (Poor)"
         else:
-            interp += (
-                "وهذا يشير إلى ضرورة مراجعة بعض البنود أو إضافة بنود جديدة لتحسين "
-                "الثبات الداخلي للمقياس. يُوصى بفحص البنود ذات الارتباط المنخفض أو "
-                "التي يؤدي حذفها إلى رفع قيمة ألفا."
-            )
-        
-        self._add_paragraph(interp)
-        self.doc.add_paragraph()
-        
-        # Writing Guidelines
-        self._add_section_header("رابعاً: كيفية الكتابة في المذكرة")
-        self._add_paragraph(
-            f'▪ في فصل الإجراءات المنهجية:\n'
-            f'"تم التحقق من ثبات المقياس باستخدام معامل ألفا كرونباخ، '
-            f'حيث بلغت قيمته (α = {results["alpha"]:.3f})، وهي قيمة {results["التصنيف"]} '
-            f'تشير إلى ثبات داخلي مناسب للمقياس."\n\n'
-            f'▪ في جدول خصائص أدوات الدراسة:\n'
-            f'يمكن إدراج جدول إحصاءات البنود أعلاه مباشرة.',
-            align='right'
-        )
-        
-        return self.doc
-    
-    def save_to_bytes(self):
-        """Save document to bytes (for HTTP response)"""
-        file_stream = io.BytesIO()
-        self.doc.save(file_stream)
-        file_stream.seek(0)
-        return file_stream
-    
-    def save(self, filename):
-        """Save document to file"""
-        self.doc.save(filename)
+            return "غير مقبول (Unacceptable)"
 
 
-# Main function for testing
-if __name__ == "__main__":
-    # Test example - Cronbach's Alpha
-    generator = SPSSWordGenerator()
+class RegressionAnalyzer:
+    """محرك تحليل الانحدار"""
     
-    test_results = {
-        'alpha': 0.876,
-        'عدد_البنود': 5,
-        'حجم_العينة': 120,
-        'التصنيف': 'ممتاز (Excellent)',
-        'إحصاءات_البنود': [
-            {'البند': 'البند 1', 'المتوسط': 3.45, 'الانحراف': 0.89, 'الارتباط_مع_المجموع': 0.67, 'ألفا_إذا_حُذف': 0.851},
-            {'البند': 'البند 2', 'المتوسط': 3.78, 'الانحراف': 0.76, 'الارتباط_مع_المجموع': 0.72, 'ألفا_إذا_حُذف': 0.843},
-            {'البند': 'البند 3', 'المتوسط': 3.56, 'الانحراف': 0.92, 'الارتباط_مع_المجموع': 0.68, 'ألفا_إذا_حُذف': 0.849},
-            {'البند': 'البند 4', 'المتوسط': 3.92, 'الانحراف': 0.81, 'الارتباط_مع_المجموع': 0.75, 'ألفا_إذا_حُذف': 0.836},
-            {'البند': 'البند 5', 'المتوسط': 3.67, 'الانحراف': 0.85, 'الارتباط_مع_المجموع': 0.70, 'ألفا_إذا_حُذف': 0.845},
-        ]
+    def __init__(self, dataframe):
+        self.df = dataframe
+    
+    def multiple_regression(self, dependent, independents):
+        """تحليل الانحدار المتعدد"""
+        try:
+            if not independents or len(independents) < 1:
+                return {"error": "يجب تحديد متغير مستقل واحد على الأقل"}
+            
+            # إعداد البيانات
+            cols = [dependent] + independents
+            data = self.df[cols].dropna()
+            
+            if len(data) < len(independents) + 2:
+                return {"error": "عدد المشاهدات غير كافٍ للانحدار"}
+            
+            # إعداد المتغيرات
+            X = data[independents]
+            y = data[dependent]
+            X = sm.add_constant(X)  # إضافة الثابت
+            
+            # تشغيل الانحدار
+            model = sm.OLS(y, X).fit()
+            
+            # استخراج النتائج
+            coefficients = []
+            for i, var in enumerate(['Constant'] + independents):
+                coefficients.append({
+                    "المتغير": var,
+                    "المعامل": round(float(model.params[i]), 3),
+                    "الخطأ_المعياري": round(float(model.bse[i]), 3),
+                    "t": round(float(model.tvalues[i]), 3),
+                    "p": round(float(model.pvalues[i]), 4)
+                })
+            
+            return {
+                "R": round(float(np.sqrt(model.rsquared)), 3),
+                "R2": round(float(model.rsquared), 3),
+                "R2_المعدل": round(float(model.rsquared_adj), 3),
+                "الخطأ_المعياري": round(float(np.sqrt(model.mse_resid)), 3),
+                "F": round(float(model.fvalue), 3),
+                "p_model": round(float(model.f_pvalue), 4),
+                "دال": bool(model.f_pvalue < 0.05),
+                "معاملات": coefficients
+            }
+        except Exception as e:
+            return {"error": f"خطأ في الانحدار: {str(e)}"}
+
+
+class AcademicReportGenerator:
+    """مولد التقارير الأكاديمية النصية (ASCII format)"""
+    
+    def generate(self, results, analysis_type):
+        """توليد تقرير أكاديمي كامل"""
+        if analysis_type == 'descriptive':
+            return self._format_descriptive(results)
+        elif analysis_type == 'ttest':
+            return self._format_ttest(results)
+        elif analysis_type == 'anova':
+            return self._format_anova(results)
+        elif analysis_type == 'correlation':
+            return self._format_correlation(results)
+        elif analysis_type == 'regression':
+            return self._format_regression(results)
+        elif analysis_type in ['chi_square', 'chisquare']:
+            return self._format_chisquare(results)
+        elif analysis_type in ['cronbach', 'cronbach_alpha']:
+            return self._format_cronbach(results)
+        else:
+            return "نوع التحليل غير مدعوم"
+    
+    def _format_descriptive(self, r):
+        """تقرير الإحصاء الوصفي الأكاديمي"""
+        report = "═"*55 + "\n"
+        report += "        التحليل الإحصائي الوصفي\n"
+        report += "        Descriptive Statistics Analysis\n"
+        report += "═"*55 + "\n\n"
+        
+        # المتغيرات الرقمية
+        if r.get('متغيرات_رقمية'):
+            report += "📊 أولاً: الإحصاءات الوصفية للمتغيرات الرقمية\n"
+            report += "─"*55 + "\n\n"
+            
+            report += "┌" + "─"*70 + "┐\n"
+            report += "│ المتغير       │  N   │  Mean  │  SD   │  Min  │  Max  │\n"
+            report += "├" + "─"*70 + "┤\n"
+            
+            for var in r['متغيرات_رقمية']:
+                report += f"│ {var['المتغير']:<14} │ {var['العدد']:>4} │ {var['المتوسط']:>6.2f} │ {var['الانحراف_المعياري']:>5.2f} │ {var['أصغر_قيمة']:>5.2f} │ {var['أكبر_قيمة']:>5.2f} │\n"
+            
+            report += "└" + "─"*70 + "┘\n\n"
+        
+        return report
+    
+    def _format_ttest(self, r):
+        """تقرير اختبار T الأكاديمي"""
+        if 'error' in r:
+            return f"❌ خطأ: {r['error']}"
+        
+        report = "═"*55 + "\n"
+        report += "   اختبار T للعينات المستقلة\n"
+        report += "   Independent Samples T-Test\n"
+        report += "═"*55 + "\n\n"
+        
+        report += "📊 أولاً: إحصاءات المجموعات\n"
+        report += "─"*55 + "\n\n"
+        
+        report += f"   المجموعة 1: {r['المجموعة_1']['الاسم']}\n"
+        report += f"   • العدد (N) = {r['المجموعة_1']['العدد']}\n"
+        report += f"   • المتوسط (M) = {r['المجموعة_1']['المتوسط']}\n"
+        report += f"   • الانحراف المعياري (SD) = {r['المجموعة_1']['الانحراف']}\n\n"
+        
+        report += f"   المجموعة 2: {r['المجموعة_2']['الاسم']}\n"
+        report += f"   • العدد (N) = {r['المجموعة_2']['العدد']}\n"
+        report += f"   • المتوسط (M) = {r['المجموعة_2']['المتوسط']}\n"
+        report += f"   • الانحراف المعياري (SD) = {r['المجموعة_2']['الانحراف']}\n\n"
+        
+        report += "📈 ثانياً: نتائج اختبار T\n"
+        report += "─"*55 + "\n\n"
+        
+        report += f"   • قيمة t = {r['t']}\n"
+        report += f"   • درجات الحرية (df) = {r['df']}\n"
+        report += f"   • مستوى الدلالة (p) = {r['p']}\n"
+        report += f"   • حجم الأثر (Cohen's d) = {r['cohens_d']} ({r['حجم_الأثر']})\n"
+        report += f"   • النتيجة: {'دال إحصائياً' if r['دال'] else 'غير دال إحصائياً'}\n\n"
+        
+        return report
+    
+    def _format_anova(self, r):
+        """تقرير ANOVA الأكاديمي"""
+        if 'error' in r:
+            return f"❌ خطأ: {r['error']}"
+        
+        report = "═"*55 + "\n"
+        report += "     تحليل التباين الأحادي - One-Way ANOVA\n"
+        report += "═"*55 + "\n\n"
+        
+        report += "📊 جدول تحليل التباين:\n"
+        report += "─"*55 + "\n\n"
+        
+        report += "┌" + "─"*70 + "┐\n"
+        report += "│ مصدر التباين  │    SS    │  df │    MS   │    F   │   Sig. │\n"
+        report += "├" + "─"*70 + "┤\n"
+        
+        report += f"│ بين المجموعات │ {r['بين_المجموعات']['مجموع_المربعات']:>8.3f} │ {r['بين_المجموعات']['درجات_الحرية']:>3} │ {r['بين_المجموعات']['متوسط_المربعات']:>7.3f} │ {r['F']:>6.3f} │ {r['p']:>6.4f} │\n"
+        report += f"│ داخل المجموعات│ {r['داخل_المجموعات']['مجموع_المربعات']:>8.3f} │ {r['داخل_المجموعات']['درجات_الحرية']:>3} │ {r['داخل_المجموعات']['متوسط_المربعات']:>7.3f} │    -   │    -   │\n"
+        report += f"│ المجموع        │ {r['الكلي']['مجموع_المربعات']:>8.3f} │ {r['الكلي']['درجات_الحرية']:>3} │    -    │    -   │    -   │\n"
+        
+        report += "└" + "─"*70 + "┘\n\n"
+        
+        report += f"• حجم الأثر (Eta²) = {r['eta_squared']} ({r['حجم_الأثر']})\n"
+        report += f"• النتيجة: {'دال إحصائياً' if r['دال'] else 'غير دال إحصائياً'}\n\n"
+        
+        return report
+    
+    def _format_correlation(self, r):
+        """تقرير الارتباط الأكاديمي"""
+        if 'error' in r:
+            return f"❌ خطأ: {r['error']}"
+        
+        report = "═"*55 + "\n"
+        report += "       تحليل الارتباط - Correlation Analysis\n"
+        report += "═"*55 + "\n\n"
+        
+        report += f"📊 مصفوفة الارتباط (الطريقة: {r['الطريقة'].title()})\n"
+        report += f"   عدد المشاهدات: {r['عدد_المشاهدات']}\n"
+        report += "─"*55 + "\n\n"
+        
+        # عرض مبسط للمصفوفة
+        report += "(انظر الجداول أعلاه للتفاصيل الكاملة)\n\n"
+        
+        return report
+    
+    def _format_regression(self, r):
+        """تقرير الانحدار الأكاديمي"""
+        if 'error' in r:
+            return f"❌ خطأ: {r['error']}"
+        
+        report = "═"*55 + "\n"
+        report += "  تحليل الانحدار المتعدد\n"
+        report += "  Multiple Regression Analysis\n"
+        report += "═"*55 + "\n\n"
+        
+        report += "📊 ملخص النموذج:\n"
+        report += "─"*55 + "\n\n"
+        
+        report += f"   • R = {r['R']}\n"
+        report += f"   • R² = {r['R2']}\n"
+        report += f"   • R² المعدل = {r['R2_المعدل']}\n"
+        report += f"   • الخطأ المعياري = {r['الخطأ_المعياري']}\n\n"
+        
+        report += "📈 معنوية النموذج:\n"
+        report += "─"*55 + "\n\n"
+        
+        report += f"   • F = {r['F']}\n"
+        report += f"   • Sig. = {r['p_model']}\n"
+        report += f"   • النتيجة: {'النموذج دال إحصائياً' if r['دال'] else 'النموذج غير دال'}\n\n"
+        
+        report += "📋 معاملات الانحدار:\n"
+        report += "─"*55 + "\n\n"
+        
+        for coef in r['معاملات']:
+            report += f"   {coef['المتغير']}:\n"
+            report += f"   • B = {coef['المعامل']}, t = {coef.get('t', 'N/A')}, p = {coef['p']}\n\n"
+        
+        return report
+    
+    def _format_chisquare(self, r):
+        """تقرير Chi-Square الأكاديمي"""
+        if 'error' in r:
+            return f"❌ خطأ: {r['error']}"
+        
+        report = "═"*55 + "\n"
+        report += "   اختبار مربع كاي - Chi-Square Test\n"
+        report += "═"*55 + "\n\n"
+        
+        report += f"📊 نتائج اختبار χ²:\n"
+        report += "─"*55 + "\n\n"
+        
+        report += f"   • χ² = {r['chi2']}\n"
+        report += f"   • df = {r['df']}\n"
+        report += f"   • Sig. = {r['p']}\n"
+        report += f"   • Cramér's V = {r['cramers_v']} ({r['قوة_العلاقة']})\n"
+        report += f"   • النتيجة: {'علاقة دالة إحصائياً' if r['دال'] else 'لا توجد علاقة دالة'}\n\n"
+        
+        return report
+    
+    def _format_cronbach(self, r):
+        """تقرير معامل ألفا كرونباخ الأكاديمي"""
+        if 'error' in r:
+            return f"❌ خطأ: {r['error']}"
+        
+        report = "═"*55 + "\n"
+        report += "   معامل ألفا كرونباخ للثبات - Cronbach's Alpha\n"
+        report += "═"*55 + "\n\n"
+        
+        report += "📊 أولاً: معامل الثبات العام\n"
+        report += "─"*55 + "\n\n"
+        
+        report += f"   • معامل ألفا (α) = {r['alpha']}\n"
+        report += f"   • عدد البنود = {r['عدد_البنود']}\n"
+        report += f"   • حجم العينة (N) = {r['حجم_العينة']}\n"
+        report += f"   • التصنيف: {r['التصنيف']}\n\n"
+        
+        report += "📋 ثانياً: جدول إحصاءات البنود\n"
+        report += "─"*55 + "\n\n"
+        
+        report += "┌" + "─"*70 + "┐\n"
+        report += "│ البند        │ المتوسط │ الانحراف │ الارتباط │ α إذا حُذف │\n"
+        report += "├" + "─"*70 + "┤\n"
+        
+        for item in r['إحصاءات_البنود']:
+            alpha_del = f"{item['ألفا_إذا_حُذف']}" if item['ألفا_إذا_حُذف'] is not None else "N/A"
+            report += f"│ {item['البند']:<12} │ {item['المتوسط']:>8} │ {item['الانحراف']:>9} │ {item['الارتباط_مع_المجموع']:>9} │ {alpha_del:>10} │\n"
+        
+        report += "└" + "─"*70 + "┘\n\n"
+        
+        return report
+
+
+# ============= API ENDPOINTS =============
+
+@app.route('/')
+def home():
+    """الصفحة الرئيسية"""
+    return jsonify({
+        "service": "نظام التحليل الإحصائي الآلي - الجزائر",
+        "version": "2.4",
+        "status": "active",
+        "endpoints": {
+            "/health": "GET - فحص الصحة",
+            "/analyze": "POST - تحليل البيانات (JSON + ASCII)",
+            "/analyze_word": "POST - تحليل البيانات (Word Document)"
+        }
+    })
+
+
+@app.route('/health')
+def health():
+    """فحص صحة الخادم"""
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat()
+    }), 200
+
+
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    """نقطة الدخول الرئيسية للتحليل - JSON Response"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"success": False, "error": "لم يتم إرسال بيانات"}), 400
+        
+        # التحقق من المدخلات الأساسية
+        if 'file_url' not in data or 'analysis_type' not in data:
+            return jsonify({"success": False, "error": "file_url و analysis_type مطلوبان"}), 400
+        
+        # تحميل الملف
+        file_handler = FileHandler()
+        df = file_handler.load_file(data['file_url'])
+        
+        if df is None:
+            return jsonify({"success": False, "error": "فشل تحميل الملف. تحقق من الرابط والصلاحيات"}), 400
+        
+        # تنفيذ التحليل المطلوب
+        analysis_type = data['analysis_type'].lower()
+        result = None
+        
+        if analysis_type == 'descriptive':
+            analyzer = DescriptiveAnalyzer(df)
+            result = analyzer.run_analysis()
+        
+        elif analysis_type == 'ttest':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = InferentialAnalyzer(df)
+            result = analyzer.ttest(params.get('group_var'), params.get('value_var'))
+        
+        elif analysis_type == 'anova':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = InferentialAnalyzer(df)
+            result = analyzer.anova(params.get('dependent'), params.get('independent'))
+        
+        elif analysis_type == 'correlation':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = InferentialAnalyzer(df)
+            result = analyzer.correlation(params.get('variables', []))
+        
+        elif analysis_type == 'regression':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = RegressionAnalyzer(df)
+            result = analyzer.multiple_regression(params.get('dependent'), params.get('independents', []))
+        
+        elif analysis_type == 'chi_square' or analysis_type == 'chisquare':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = InferentialAnalyzer(df)
+            result = analyzer.chi_square(params.get('var1'), params.get('var2'))
+        
+        elif analysis_type == 'cronbach' or analysis_type == 'cronbach_alpha':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = InferentialAnalyzer(df)
+            result = analyzer.cronbach_alpha(params.get('variables', []))
+        
+        else:
+            return jsonify({"success": False, "error": f"نوع التحليل '{analysis_type}' غير مدعوم"}), 400
+        
+        # توليد التقرير الأكاديمي
+        report_gen = AcademicReportGenerator()
+        report = report_gen.generate(result, analysis_type)
+        
+        return jsonify({
+            "success": True,
+            "analysis_type": analysis_type,
+            "timestamp": datetime.now().isoformat(),
+            "data": result,
+            "report": report
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@app.route('/analyze_word', methods=['POST'])
+def analyze_word():
+    """
+    نقطة الدخول الجديدة - Word Document Response
+    
+    يستقبل نفس البيانات مثل /analyze لكن يرجع ملف Word بدلاً من JSON
+    
+    Expected JSON input:
+    {
+        "file_url": "https://...",
+        "analysis_type": "descriptive|ttest|anova|correlation|regression|chi_square|cronbach",
+        "params" or "variables": {...}
     }
     
-    generator.generate_cronbach(test_results)
-    generator.save('/mnt/user-data/outputs/test_cronbach_report.docx')
-    print("✅ Test Cronbach report generated successfully!")
+    Returns: Word document (.docx)
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"success": False, "error": "لم يتم إرسال بيانات"}), 400
+        
+        # التحقق من المدخلات الأساسية
+        if 'file_url' not in data or 'analysis_type' not in data:
+            return jsonify({"success": False, "error": "file_url و analysis_type مطلوبان"}), 400
+        
+        # تحميل الملف
+        file_handler = FileHandler()
+        df = file_handler.load_file(data['file_url'])
+        
+        if df is None:
+            return jsonify({"success": False, "error": "فشل تحميل الملف"}), 400
+        
+        # تنفيذ التحليل المطلوب
+        analysis_type = data['analysis_type'].lower()
+        result = None
+        
+        if analysis_type == 'descriptive':
+            analyzer = DescriptiveAnalyzer(df)
+            result = analyzer.run_analysis()
+        
+        elif analysis_type == 'ttest':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = InferentialAnalyzer(df)
+            result = analyzer.ttest(params.get('group_var'), params.get('value_var'))
+        
+        elif analysis_type == 'anova':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = InferentialAnalyzer(df)
+            result = analyzer.anova(params.get('dependent'), params.get('independent'))
+        
+        elif analysis_type == 'correlation':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = InferentialAnalyzer(df)
+            result = analyzer.correlation(params.get('variables', []))
+        
+        elif analysis_type == 'regression':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = RegressionAnalyzer(df)
+            result = analyzer.multiple_regression(params.get('dependent'), params.get('independents', []))
+        
+        elif analysis_type == 'chi_square' or analysis_type == 'chisquare':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = InferentialAnalyzer(df)
+            result = analyzer.chi_square(params.get('var1'), params.get('var2'))
+        
+        elif analysis_type == 'cronbach' or analysis_type == 'cronbach_alpha':
+            params = data.get('params') or data.get('variables') or {}
+            analyzer = InferentialAnalyzer(df)
+            result = analyzer.cronbach_alpha(params.get('variables', []))
+        
+        else:
+            return jsonify({"success": False, "error": f"نوع التحليل '{analysis_type}' غير مدعوم"}), 400
+        
+        # توليد Word Document
+        word_gen = SPSSWordGenerator()
+        
+        if analysis_type == 'descriptive':
+            word_gen.generate_descriptive(result)
+        elif analysis_type == 'ttest':
+            word_gen.generate_ttest(result)
+        elif analysis_type == 'anova':
+            word_gen.generate_anova(result)
+        elif analysis_type == 'correlation':
+            word_gen.generate_correlation(result)
+        elif analysis_type == 'regression':
+            word_gen.generate_regression(result)
+        elif analysis_type in ['chi_square', 'chisquare']:
+            word_gen.generate_chisquare(result)
+        elif analysis_type in ['cronbach', 'cronbach_alpha']:
+            word_gen.generate_cronbach(result)
+        
+        # حفظ في ملف مؤقت
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.docx')
+        word_gen.save(temp_file.name)
+        temp_file.close()
+        
+        # تحديد اسم الملف
+        filename = f"SPSS_{analysis_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+        
+        # إرسال الملف
+        return send_file(
+            temp_file.name,
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            as_attachment=True,
+            download_name=filename
+        )
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+    finally:
+        # تنظيف الملف المؤقت
+        try:
+            if 'temp_file' in locals():
+                os.unlink(temp_file.name)
+        except:
+            pass
+
+
+if __name__ == '__main__':
+    import os
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
