@@ -263,7 +263,19 @@ class InferentialAnalyzer:
             # حجم الأثر (Eta Squared)
             eta_squared = ss_between / ss_total
             
+            # ===== NEW: إحصاءات المجموعات =====
+            group_descriptives = {}
+            for i, name in enumerate(labels):
+                group_data = groups[i]
+                group_descriptives[str(name)] = {
+                    'العدد': int(len(group_data)),
+                    'المتوسط': round(float(np.mean(group_data)), 2),
+                    'الانحراف_المعياري': round(float(np.std(group_data, ddof=1)), 2)
+                }
+            
             return {
+                "N": int(len(clean_df)),
+                "إحصاءات_المجموعات": group_descriptives,
                 "بين_المجموعات": {
                     "مجموع_المربعات": round(float(ss_between), 3),
                     "درجات_الحرية": int(df_between),
@@ -287,7 +299,7 @@ class InferentialAnalyzer:
             }
         except Exception as e:
             return {"error": f"خطأ في ANOVA: {str(e)}"}
-    
+
     def _interpret_eta_squared(self, eta):
         """تفسير Eta Squared"""
         if eta < 0.01:
@@ -311,34 +323,68 @@ class InferentialAnalyzer:
             if len(data) < 3:
                 return {"error": "عدد المشاهدات غير كافٍ (أقل من 3)"}
             
+            # ===== NEW: إحصاءات وصفية =====
+            descriptive_stats = {}
+            for var in variables:
+                descriptive_stats[var] = {
+                    'N': int(len(data)),
+                    'Mean': round(float(data[var].mean()), 2),
+                    'SD': round(float(data[var].std(ddof=1)), 2)
+                }
+            
             # حساب الارتباط
             corr_matrix = data.corr()
             
-            # بناء المصفوفة مع قيم p
+            # بناء المصفوفة مع قيم p - FIXED KEYS
             result_matrix = {}
+            significant_results = []
+            
             for var1 in variables:
                 result_matrix[var1] = {}
                 for var2 in variables:
                     if var1 == var2:
                         result_matrix[var1][var2] = {
-                            "الارتباط": 1.0,
+                            "r": 1.0,
                             "p": 0.0
                         }
                     else:
                         r, p = stats.pearsonr(data[var1], data[var2])
                         result_matrix[var1][var2] = {
-                            "الارتباط": round(float(r), 3),
+                            "r": round(float(r), 3),
                             "p": round(float(p), 4)
                         }
+                        
+                        # جمع النتائج الدالة
+                        if p < 0.05 and var1 < var2:  # تجنب التكرار
+                            significant_results.append({
+                                'var1': var1,
+                                'var2': var2,
+                                'r': round(float(r), 3),
+                                'p': round(float(p), 4),
+                                'قوة': self._interpret_correlation_strength(abs(r))
+                            })
             
             return {
-                "الطريقة": "pearson",
-                "عدد_المشاهدات": int(len(data)),
-                "مصفوفة_الارتباط": result_matrix
+                "method": "pearson",
+                "N": int(len(data)),
+                "إحصاءات_وصفية": descriptive_stats,
+                "مصفوفة_الارتباط": result_matrix,
+                "نتائج_دالة": significant_results
             }
         except Exception as e:
             return {"error": f"خطأ في تحليل الارتباط: {str(e)}"}
     
+    def _interpret_correlation_strength(self, abs_r):
+        """تفسير قوة الارتباط"""
+        if abs_r < 0.3:
+            return "ضعيفة"
+        elif abs_r < 0.5:
+            return "متوسطة"
+        elif abs_r < 0.7:
+            return "قوية"
+        else:
+            return "قوية جداً"
+
     def chi_square(self, var1, var2):
         """اختبار مربع كاي"""
         try:
@@ -354,19 +400,21 @@ class InferentialAnalyzer:
             cramers_v = np.sqrt(chi2 / (n * min_dim))
             
             return {
-                "المتغير_1": var1,
-                "المتغير_2": var2,
-                "chi2": round(float(chi2), 3),
+                "N": int(n),
+                "var1": var1,
+                "var2": var2,
+                "chi_square": round(float(chi2), 3),
                 "df": int(dof),
                 "p": round(float(p), 4),
                 "cramers_v": round(float(cramers_v), 3),
                 "دال": bool(p < 0.05),
+                "مستوى_الدلالة": self._get_significance_level(p),
                 "قوة_العلاقة": self._interpret_cramers_v(cramers_v),
                 "جدول_التوافق": contingency.to_dict()
             }
         except Exception as e:
             return {"error": f"خطأ في Chi-Square: {str(e)}"}
-    
+
     def _interpret_cramers_v(self, v):
         """تفسير Cramér's V"""
         if v < 0.1:
