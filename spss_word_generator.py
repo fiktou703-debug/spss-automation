@@ -297,21 +297,55 @@ class SPSSWordGenerator:
     
     def generate_anova(self, results):
         """Generate One-Way ANOVA report"""
-        self._add_title("تحليل التباين الأحادي\nOne-Way ANOVA")
+        self._add_title("تحليل التباين الأحادي
+One-Way ANOVA")
         self.doc.add_paragraph()
         
         if 'error' in results:
             self._add_paragraph(f"❌ خطأ: {results['error']}")
             return self.doc
         
-        # Introduction
-        self._add_section_header("أولاً: جدول تحليل التباين ANOVA")
+        # ===== NEW: Methodological Info =====
+        self._add_section_header("📋 معلومات التحليل:")
+        self._add_paragraph(f"• الاختبار: تحليل التباين الأحادي (One-Way ANOVA)")
+        if 'إحصاءات_المجموعات' in results:
+            self._add_paragraph(f"• عدد المجموعات: {len(results['إحصاءات_المجموعات'])}")
+        self._add_paragraph(f"• العدد الكلي: N = {results.get('N', 'غير محدد')}")
+        self._add_paragraph(f"• مستوى الدلالة: α = 0.05")
+        self.doc.add_paragraph()
+        
+        # ===== NEW: Group Descriptive Statistics =====
+        self._add_section_header("📊 أولاً: الإحصاءات الوصفية للمجموعات")
+        self._add_paragraph(
+            "يعرض الجدول التالي الإحصاءات الوصفية لكل مجموعة من مجموعات المتغير المستقل."
+        )
+        self.doc.add_paragraph()
+        
+        if 'إحصاءات_المجموعات' in results:
+            groups = results['إحصاءات_المجموعات']
+            
+            table = self._create_table(
+                rows=len(groups) + 1,
+                cols=4,
+                headers=['المجموعة', 'N', 'Mean', 'Std. Deviation']
+            )
+            
+            for i, (group_name, stats) in enumerate(groups.items(), start=1):
+                cells = table.rows[i].cells
+                self._fill_table_cell(cells[0], str(group_name), align='right', bold=True)
+                self._fill_table_cell(cells[1], stats.get('العدد', '-'))
+                self._fill_table_cell(cells[2], f"{stats.get('المتوسط', 0):.2f}")
+                self._fill_table_cell(cells[3], f"{stats.get('الانحراف_المعياري', 0):.2f}")
+            
+            self.doc.add_paragraph()
+        
+        # ===== ANOVA Table =====
+        self._add_section_header("📈 ثانياً: جدول تحليل التباين ANOVA")
         self._add_paragraph(
             "يعرض الجدول التالي نتائج تحليل التباين الأحادي للفروق بين المجموعات."
         )
         self.doc.add_paragraph()
         
-        # ANOVA Table
         table = self._create_table(
             rows=4,
             cols=6,
@@ -348,7 +382,7 @@ class SPSSWordGenerator:
         self.doc.add_paragraph()
         
         # Interpretation
-        self._add_section_header("ثانياً: التفسير الأكاديمي")
+        self._add_section_header("📖 ثالثاً: التفسير الأكاديمي")
         
         if results['دال']:
             interp = (
@@ -370,73 +404,161 @@ class SPSSWordGenerator:
         
         self._add_paragraph(interp)
         
+        # ===== NEW: Writing Guide =====
+        self.doc.add_paragraph()
+        self._add_section_header("📝 رابعاً: كيفية الكتابة في المذكرة")
+        
+        self._add_paragraph("• في فصل الإجراءات المنهجية:", bold=True)
+        self._add_paragraph(
+            '"تم استخدام اختبار تحليل التباين الأحادي (One-Way ANOVA) للكشف عن الفروق بين '
+            'المجموعات، حيث بلغت العينة الكلية N = ' + str(results.get('N', 'X')) + '."'
+        )
+        
+        self.doc.add_paragraph()
+        self._add_paragraph("• في فصل النتائج:", bold=True)
+        self._add_paragraph(
+            '"أظهرت نتائج تحليل التباين الأحادي وجود فروق دالة إحصائياً بين المجموعات '
+            '(F = X.XX, p < 0.05), مما يدل على تأثير [المتغير المستقل] على [المتغير التابع]."'
+        )
+        
         return self.doc
-    
+
     def generate_correlation(self, results):
         """Generate Correlation Analysis report"""
-        self._add_title("تحليل الارتباط\nCorrelation Analysis")
+        self._add_title("تحليل الارتباط
+Correlation Analysis")
         self.doc.add_paragraph()
         
         if 'error' in results:
             self._add_paragraph(f"❌ خطأ: {results['error']}")
             return self.doc
         
-        # Introduction
-        self._add_section_header("أولاً: مصفوفة معاملات الارتباط")
-        method = "بيرسون (Pearson)" if results.get('الطريقة') == 'pearson' else "سبيرمان (Spearman)"
-        self._add_paragraph(f"يعرض الجدول التالي معاملات الارتباط باستخدام طريقة {method}.")
+        # ===== NEW: Methodological Info =====
+        self._add_section_header("📋 معلومات التحليل:")
+        method_ar = "بيرسون" if results.get('method') == 'pearson' else "سبيرمان"
+        method_en = "Pearson" if results.get('method') == 'pearson' else "Spearman"
+        self._add_paragraph(f"• الاختبار: معامل ارتباط {method_ar} ({method_en} Correlation)")
+        self._add_paragraph(f"• العدد الكلي: N = {results.get('N', 'غير محدد')}")
+        self._add_paragraph(f"• مستوى الدلالة: α = 0.05")
         self.doc.add_paragraph()
         
-        # Correlation Matrix
+        # ===== NEW: Descriptive Statistics =====
+        self._add_section_header("📊 أولاً: الإحصاءات الوصفية للمتغيرات")
+        self._add_paragraph(
+            "يعرض الجدول التالي الإحصاءات الوصفية للمتغيرات المدروسة في تحليل الارتباط."
+        )
+        self.doc.add_paragraph()
+        
+        if 'إحصاءات_وصفية' in results:
+            descriptives = results['إحصاءات_وصفية']
+            
+            table = self._create_table(
+                rows=len(descriptives) + 1,
+                cols=4,
+                headers=['المتغير', 'N', 'Mean', 'Std. Deviation']
+            )
+            
+            for i, (var_name, stats) in enumerate(descriptives.items(), start=1):
+                cells = table.rows[i].cells
+                self._fill_table_cell(cells[0], str(var_name), align='right', bold=True)
+                self._fill_table_cell(cells[1], stats.get('N', '-'))
+                self._fill_table_cell(cells[2], f"{stats.get('Mean', 0):.2f}")
+                self._fill_table_cell(cells[3], f"{stats.get('SD', 0):.2f}")
+            
+            self.doc.add_paragraph()
+        
+        # ===== Correlation Matrix =====
+        self._add_section_header("📈 ثانياً: مصفوفة الارتباط")
+        self._add_paragraph(
+            "يعرض الجدول التالي معاملات الارتباط بين المتغيرات، حيث تشير النجوم إلى مستوى الدلالة الإحصائية "
+            "(* p < 0.05, ** p < 0.01, *** p < 0.001)."
+        )
+        self.doc.add_paragraph()
+        
         if 'مصفوفة_الارتباط' in results:
             matrix = results['مصفوفة_الارتباط']
             variables = list(matrix.keys())
-            n_vars = len(variables)
             
             # Create table
             table = self._create_table(
-                rows=n_vars + 1,
-                cols=n_vars + 1,
+                rows=len(variables) + 1,
+                cols=len(variables) + 1,
                 headers=[''] + variables
             )
             
-            # Fill correlation values
+            # Fill matrix
             for i, var1 in enumerate(variables, start=1):
                 cells = table.rows[i].cells
                 self._fill_table_cell(cells[0], var1, align='right', bold=True)
                 
                 for j, var2 in enumerate(variables, start=1):
-                    corr_val = matrix[var1].get(var2, {}).get('الارتباط', '-')
-                    if corr_val != '-':
-                        # Add asterisk for significant correlations
-                        p_val = matrix[var1].get(var2, {}).get('p', 1.0)
-                        if p_val < 0.001:
-                            display = f"{corr_val:.3f}***"
-                        elif p_val < 0.01:
-                            display = f"{corr_val:.3f}**"
-                        elif p_val < 0.05:
-                            display = f"{corr_val:.3f}*"
-                        else:
-                            display = f"{corr_val:.3f}"
-                        self._fill_table_cell(cells[j], display)
+                    r_value = matrix[var1][var2]['r']
+                    p_value = matrix[var1][var2]['p']
+                    
+                    # Format with significance stars
+                    if p_value < 0.001:
+                        sig_text = f"{r_value:.3f}***"
+                    elif p_value < 0.01:
+                        sig_text = f"{r_value:.3f}**"
+                    elif p_value < 0.05:
+                        sig_text = f"{r_value:.3f}*"
                     else:
-                        self._fill_table_cell(cells[j], corr_val)
+                        sig_text = f"{r_value:.3f}"
+                    
+                    self._fill_table_cell(cells[j], sig_text)
             
             self.doc.add_paragraph()
-            self._add_paragraph("* p < 0.05, ** p < 0.01, *** p < 0.001", align='left')
+            
+            # ===== NEW: Note about N =====
+            note = self.doc.add_paragraph()
+            note.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            run = note.add_run(f"Note: N = {results.get('N', 'X')} for all correlations.")
+            run.font.name = 'Times New Roman'
+            run.font.size = Pt(10)
+            run.font.italic = True
             self.doc.add_paragraph()
         
         # Interpretation
-        self._add_section_header("ثانياً: التفسير الأكاديمي")
+        self._add_section_header("📖 ثالثاً: التفسير الأكاديمي")
+        
+        if 'نتائج_دالة' in results and results['نتائج_دالة']:
+            interp = "أظهرت نتائج تحليل الارتباط وجود علاقات ذات دلالة إحصائية بين بعض المتغيرات:
+
+"
+            
+            for result in results['نتائج_دالة']:
+                direction = "موجبة" if result['r'] > 0 else "سالبة"
+                strength = result.get('قوة', 'متوسطة')
+                interp += (
+                    f"• العلاقة بين {result['var1']} و {result['var2']}: "
+                    f"علاقة {direction} {strength} (r = {result['r']:.3f}, p = {result['p']:.4f})
+"
+                )
+        else:
+            interp = "أظهرت نتائج تحليل الارتباط عدم وجود علاقات ذات دلالة إحصائية بين المتغيرات عند مستوى دلالة 0.05."
+        
+        self._add_paragraph(interp)
+        
+        # ===== NEW: Writing Guide =====
+        self.doc.add_paragraph()
+        self._add_section_header("📝 رابعاً: كيفية الكتابة في المذكرة")
+        
+        self._add_paragraph("• في فصل الإجراءات المنهجية:", bold=True)
+        method_ar = "بيرسون" if results.get('method') == 'pearson' else "سبيرمان"
         self._add_paragraph(
-            "تشير نتائج تحليل الارتباط إلى وجود علاقات ارتباطية بين المتغيرات المدروسة. "
-            "العلاقات الموجبة (قيم موجبة) تشير إلى أن زيادة أحد المتغيرين تصاحبها زيادة في الآخر، "
-            "بينما العلاقات السالبة (قيم سالبة) تشير إلى علاقة عكسية. قوة العلاقة تُحدد بقيمة "
-            "معامل الارتباط: ضعيفة (< 0.3)، متوسطة (0.3-0.7)، قوية (> 0.7)."
+            f'"تم استخدام معامل ارتباط {method_ar} لقياس العلاقة بين المتغيرات، '
+            f'حيث بلغت العينة N = {results.get("N", "X")}."'
+        )
+        
+        self.doc.add_paragraph()
+        self._add_paragraph("• في فصل النتائج:", bold=True)
+        self._add_paragraph(
+            '"أظهرت نتائج تحليل الارتباط وجود علاقة [موجبة/سالبة] [ضعيفة/متوسطة/قوية] '
+            'ذات دلالة إحصائية بين [المتغير الأول] و[المتغير الثاني] (r = X.XX, p < 0.05)."'
         )
         
         return self.doc
-    
+
     def generate_regression(self, results):
         """Generate Multiple Regression Analysis report"""
         self._add_title("تحليل الانحدار المتعدد\nMultiple Regression Analysis")
@@ -541,69 +663,146 @@ class SPSSWordGenerator:
     
     def generate_chisquare(self, results):
         """Generate Chi-Square Test report"""
-        self._add_title("اختبار مربع كاي\nChi-Square Test")
+        self._add_title("اختبار مربع كاي
+Chi-Square Test")
         self.doc.add_paragraph()
         
         if 'error' in results:
             self._add_paragraph(f"❌ خطأ: {results['error']}")
             return self.doc
         
-        # Introduction
-        self._add_section_header("أولاً: جدول التوافق - Crosstabulation")
+        # ===== NEW: Methodological Info =====
+        self._add_section_header("📋 معلومات التحليل:")
+        self._add_paragraph(f"• الاختبار: اختبار مربع كاي للاستقلالية (Chi-Square Test of Independence)")
+        self._add_paragraph(f"• المتغير الأول: {results.get('var1', 'غير محدد')}")
+        self._add_paragraph(f"• المتغير الثاني: {results.get('var2', 'غير محدد')}")
+        self._add_paragraph(f"• العدد الكلي: N = {results.get('N', 'غير محدد')}")
+        self._add_paragraph(f"• مستوى الدلالة: α = 0.05")
+        self.doc.add_paragraph()
+        
+        # ===== NEW: Crosstabulation Table =====
+        self._add_section_header("📊 أولاً: جدول التوافق (Crosstabulation)")
         self._add_paragraph(
-            "يعرض الجدول التالي التوزيع التكراري للمتغيرين وقيم التكرارات المتوقعة."
+            "يعرض الجدول التالي التوزيع التكراري للحالات حسب فئات المتغيرين المدروسين."
         )
         self.doc.add_paragraph()
         
-        # Crosstabulation Table
         if 'جدول_التوافق' in results:
             crosstab = results['جدول_التوافق']
-            # Note: Simplified version - actual implementation would need proper matrix display
-            self._add_paragraph("(يُدرج هنا جدول التوافق الكامل)")
+            
+            # Get categories
+            row_categories = list(crosstab.keys())
+            col_categories = list(crosstab[row_categories[0]].keys())
+            
+            # Create table (rows + header + total row)
+            table = self._create_table(
+                rows=len(row_categories) + 2,
+                cols=len(col_categories) + 2,
+                headers=[''] + col_categories + ['المجموع']
+            )
+            
+            # Calculate column totals
+            col_totals = {col: 0 for col in col_categories}
+            grand_total = 0
+            
+            # Fill data rows
+            for i, row_cat in enumerate(row_categories, start=1):
+                cells = table.rows[i].cells
+                self._fill_table_cell(cells[0], str(row_cat), align='right', bold=True)
+                
+                row_total = 0
+                for j, col_cat in enumerate(col_categories, start=1):
+                    count = crosstab[row_cat][col_cat]
+                    self._fill_table_cell(cells[j], str(count))
+                    row_total += count
+                    col_totals[col_cat] += count
+                
+                # Row total
+                self._fill_table_cell(cells[-1], str(row_total), bold=True)
+                grand_total += row_total
+            
+            # Total row
+            last_row_cells = table.rows[-1].cells
+            self._fill_table_cell(last_row_cells[0], 'المجموع', align='right', bold=True)
+            
+            for j, col_cat in enumerate(col_categories, start=1):
+                self._fill_table_cell(last_row_cells[j], str(col_totals[col_cat]), bold=True)
+            
+            self._fill_table_cell(last_row_cells[-1], str(grand_total), bold=True)
+            
             self.doc.add_paragraph()
         
-        # Chi-Square Tests
-        self._add_section_header("ثانياً: نتائج اختبار مربع كاي")
-        self._add_paragraph("يوضح الجدول التالي نتائج اختبار الاستقلالية.")
+        # ===== Chi-Square Results =====
+        self._add_section_header("📈 ثانياً: نتائج اختبار مربع كاي")
+        self._add_paragraph(
+            "يعرض الجدول التالي نتائج اختبار مربع كاي للاستقلالية بين المتغيرين."
+        )
         self.doc.add_paragraph()
         
         table = self._create_table(
             rows=2,
             cols=4,
-            headers=['Chi-Square', 'df', 'Sig.', "Cramér's V"]
+            headers=['Chi-Square (χ²)', 'df', 'Asymp. Sig.', "Cramér's V"]
         )
         
         cells = table.rows[1].cells
-        self._fill_table_cell(cells[0], f"{results['chi2']:.3f}")
+        self._fill_table_cell(cells[0], f"{results['chi_square']:.3f}")
         self._fill_table_cell(cells[1], results['df'])
         self._fill_table_cell(cells[2], f"{results['p']:.4f}")
-        self._fill_table_cell(cells[3], f"{results['cramers_v']:.3f}")
+        
+        if 'cramers_v' in results:
+            self._fill_table_cell(cells[3], f"{results['cramers_v']:.3f}")
+        else:
+            self._fill_table_cell(cells[3], '-')
         
         self.doc.add_paragraph()
         
         # Interpretation
-        self._add_section_header("ثالثاً: التفسير الأكاديمي")
+        self._add_section_header("📖 ثالثاً: التفسير الأكاديمي")
         
-        if results['دال']:
+        if results.get('دال'):
             interp = (
-                f"أظهرت نتائج اختبار مربع كاي (χ²) وجود علاقة ذات دلالة إحصائية بين "
-                f"{results['المتغير_1']} و{results['المتغير_2']} عند مستوى دلالة 0.05، "
-                f"حيث بلغت قيمة χ² = {results['chi2']:.3f} بدرجات حرية df = {results['df']}, "
-                f"وقيمة p = {results['p']:.4f}. وبلغ معامل كريمر (Cramér's V = {results['cramers_v']:.3f}) "
-                f"وهو {results['قوة_العلاقة']}، مما يدل على وجود ارتباط بين المتغيرين."
+                f"أظهرت نتائج اختبار مربع كاي وجود علاقة ذات دلالة إحصائية بين المتغيرين "
+                f"عند مستوى دلالة {results.get('مستوى_الدلالة', '0.05')}, حيث بلغت قيمة "
+                f"χ² = {results['chi_square']:.3f} بدرجات حرية df = {results['df']}, "
+                f"وقيمة p = {results['p']:.4f}. "
             )
+            
+            if 'cramers_v' in results:
+                strength = results.get('قوة_العلاقة', 'متوسطة')
+                interp += (
+                    f"وبلغ معامل كرامر (Cramér's V = {results['cramers_v']:.3f}) "
+                    f"وهو يشير إلى علاقة {strength} بين المتغيرين."
+                )
         else:
             interp = (
-                f"أظهرت نتائج اختبار مربع كاي (χ²) عدم وجود علاقة ذات دلالة إحصائية بين "
-                f"{results['المتغير_1']} و{results['المتغير_2']} عند مستوى دلالة 0.05، "
-                f"حيث بلغت قيمة χ² = {results['chi2']:.3f} بدرجات حرية df = {results['df']}, "
-                f"وقيمة p = {results['p']:.4f}، وهي قيمة أكبر من 0.05."
+                f"أظهرت نتائج اختبار مربع كاي عدم وجود علاقة ذات دلالة إحصائية بين المتغيرين "
+                f"عند مستوى دلالة 0.05, حيث بلغت قيمة χ² = {results['chi_square']:.3f} "
+                f"بدرجات حرية df = {results['df']}, وقيمة p = {results['p']:.4f}، "
+                f"وهي قيمة أكبر من 0.05، مما يدل على استقلالية المتغيرين."
             )
         
         self._add_paragraph(interp)
         
+        # ===== NEW: Writing Guide =====
+        self.doc.add_paragraph()
+        self._add_section_header("📝 رابعاً: كيفية الكتابة في المذكرة")
+        
+        self._add_paragraph("• في فصل الإجراءات المنهجية:", bold=True)
+        self._add_paragraph(
+            '"تم استخدام اختبار مربع كاي (Chi-Square) للكشف عن العلاقة بين المتغيرين الاسميين، '
+            'حيث بلغت العينة الكلية N = ' + str(results.get('N', 'X')) + '."'
+        )
+        
+        self.doc.add_paragraph()
+        self._add_paragraph("• في فصل النتائج:", bold=True)
+        self._add_paragraph(
+            '"أظهرت نتائج اختبار مربع كاي وجود علاقة دالة إحصائياً بين [المتغير الأول] '
+            'و[المتغير الثاني] (χ² = X.XX, p < 0.05), مما يدل على وجود ارتباط بين المتغيرين."'
+        )
+        
         return self.doc
-    
+
     def generate_cronbach(self, results):
         """Generate Cronbach's Alpha Reliability report"""
         self._add_title("معامل ألفا كرونباخ للثبات\nCronbach's Alpha Reliability")
