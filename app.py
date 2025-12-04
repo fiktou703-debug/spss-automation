@@ -13,7 +13,9 @@ from flask import Flask, request, jsonify, send_file
 import pandas as pd
 import numpy as np
 from scipy import stats
+from scipy.stats import levene
 import statsmodels.api as sm
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 from datetime import datetime
 import requests
 from io import BytesIO
@@ -263,6 +265,9 @@ class InferentialAnalyzer:
             # حجم الأثر (Eta Squared)
             eta_squared = ss_between / ss_total
             
+            # ===== Levene's Test for Homogeneity of Variances =====
+            levene_stat, levene_p = levene(*groups)
+            
             # ===== NEW: إحصاءات المجموعات =====
             group_descriptives = {}
             for i, name in enumerate(labels):
@@ -273,7 +278,7 @@ class InferentialAnalyzer:
                     'الانحراف_المعياري': round(float(np.std(group_data, ddof=1)), 2)
                 }
             
-            return {
+            result = {
                 "N": int(len(clean_df)),
                 "إحصاءات_المجموعات": group_descriptives,
                 "بين_المجموعات": {
@@ -295,8 +300,47 @@ class InferentialAnalyzer:
                 "eta_squared": round(float(eta_squared), 3),
                 "دال": bool(p_value < 0.05),
                 "مستوى_الدلالة": self._get_significance_level(p_value),
-                "حجم_الأثر": self._interpret_eta_squared(eta_squared)
+                "حجم_الأثر": self._interpret_eta_squared(eta_squared),
+                "levene_statistic": round(float(levene_stat), 3),
+                "levene_p": round(float(levene_p), 4),
+                "تجانس_التباين": bool(levene_p > 0.05)
             }
+            
+            # ===== NEW: Post-hoc Tests (عند وجود دلالة فقط) =====
+            if p_value < 0.05 and len(groups) >= 2:
+                post_hoc_comparisons = []
+                
+                # مقارنات ثنائية بين جميع المجموعات
+                for i in range(len(groups)):
+                    for j in range(i+1, len(groups)):
+                        group1_data = groups[i]
+                        group2_data = groups[j]
+                        
+                        # حساب الفرق
+                        mean_diff = np.mean(group1_data) - np.mean(group2_data)
+                        
+                        # t-test للمقارنة الثنائية
+                        t_stat, p_val = stats.ttest_ind(group1_data, group2_data)
+                        
+                        # تطبيق Bonferroni correction للمقارنات المتعددة
+                        num_comparisons = len(groups) * (len(groups) - 1) / 2
+                        p_adjusted = min(p_val * num_comparisons, 1.0)
+                        
+                        post_hoc_comparisons.append({
+                            'group1': str(labels[i]),
+                            'group2': str(labels[j]),
+                            'mean_diff': round(float(mean_diff), 3),
+                            'p': round(float(p_adjusted), 4),
+                            'دال': bool(p_adjusted < 0.05)
+                        })
+                
+                result['post_hoc'] = {
+                    'method': 'Bonferroni',
+                    'comparisons': post_hoc_comparisons
+                }
+            
+            return result
+            
         except Exception as e:
             return {"error": f"خطأ في ANOVA: {str(e)}"}
 
@@ -531,15 +575,37 @@ class RegressionAnalyzer:
                     "p": round(float(model.pvalues[i]), 4)
                 })
             
+            # ===== VIF (Variance Inflation Factor) =====
+            vif_data = []
+            X_for_vif = data[independents]
+            for i, col in enumerate(independents):
+                vif = variance_inflation_factor(X_for_vif.values, i)
+                vif_data.append({
+                    "المتغير": col,
+                    "VIF": round(float(vif), 3) if not np.isinf(vif) else 999.0,
+                    "Tolerance": round(float(1/vif), 3) if vif != 0 and not np.isinf(vif) else 0.001
+                })
+            
+            # ===== Durbin-Watson =====
+            from statsmodels.stats.stattools import durbin_watson
+            dw_stat = durbin_watson(model.resid)
+            
+            # ===== المعامل الثابت =====
+            المعامل_الثابت = round(float(model.params[0]), 3)
+            
             return {
                 "R": round(float(np.sqrt(model.rsquared)), 3),
                 "R2": round(float(model.rsquared), 3),
                 "R2_المعدل": round(float(model.rsquared_adj), 3),
                 "الخطأ_المعياري": round(float(np.sqrt(model.mse_resid)), 3),
                 "F": round(float(model.fvalue), 3),
+                "df": f"{len(independents)}, {len(data) - len(independents) - 1}",
                 "p_model": round(float(model.f_pvalue), 4),
                 "دال": bool(model.f_pvalue < 0.05),
-                "معاملات": coefficients
+                "معاملات": coefficients,
+                "المعامل_الثابت": المعامل_الثابت,
+                "VIF": vif_data,
+                "durbin_watson": round(float(dw_stat), 3)
             }
         except Exception as e:
             return {"error": f"خطأ في الانحدار: {str(e)}"}
@@ -660,8 +726,8 @@ class AcademicReportGenerator:
         report += "       تحليل الارتباط - Correlation Analysis\n"
         report += "═"*55 + "\n\n"
         
-        report += f"📊 مصفوفة الارتباط (الطريقة: {r['الطريقة'].title()})\n"
-        report += f"   عدد المشاهدات: {r['عدد_المشاهدات']}\n"
+        report += f"📊 مصفوفة الارتباط (الطريقة: {r['method'].title()})\n"
+        report += f"   عدد المشاهدات: {r['N']}\n"
         report += "─"*55 + "\n\n"
         
         # عرض مبسط للمصفوفة
@@ -715,7 +781,7 @@ class AcademicReportGenerator:
         report += f"📊 نتائج اختبار χ²:\n"
         report += "─"*55 + "\n\n"
         
-        report += f"   • χ² = {r['chi2']}\n"
+        report += f"   • χ² = {r['chi_square']}\n"
         report += f"   • df = {r['df']}\n"
         report += f"   • Sig. = {r['p']}\n"
         report += f"   • Cramér's V = {r['cramers_v']} ({r['قوة_العلاقة']})\n"
