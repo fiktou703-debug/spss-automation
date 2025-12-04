@@ -1016,16 +1016,16 @@ class SPSSWordGenerator:
                 self._add_paragraph(f"• {var_data['المتغير']}:", bold=True)
                 
                 table = self._create_table(
-                    rows=len(var_data['توزيع']) + 1,
+                    rows=len(var_data['التوزيع']) + 1,
                     cols=3,
                     headers=['الفئة', 'Frequency', 'Percent']
                 )
                 
-                for i, (category, freq, percent) in enumerate(var_data['توزيع'], start=1):
+                for i, item in enumerate(var_data['التوزيع'], start=1):
                     cells = table.rows[i].cells
-                    self._fill_table_cell(cells[0], str(category), align='right')
-                    self._fill_table_cell(cells[1], str(freq))
-                    self._fill_table_cell(cells[2], f"{percent:.1f}%")
+                    self._fill_table_cell(cells[0], str(item['الفئة']), align='right')
+                    self._fill_table_cell(cells[1], str(item['التكرار']))
+                    self._fill_table_cell(cells[2], f"{item['النسبة']:.1f}%")
                 
                 self.doc.add_paragraph()
         
